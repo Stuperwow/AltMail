@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: AltMail
+## Notes: Mailbox side panel: click an alt to fill in their name and a subject, pick bag items to mass-attach.
+## Author: Tim
+## Version: 1.1.0
+## IconTexture: Interface\AddOns\AltMail\AltMail.tga
+## SavedVariables: AltMailDB
+
+AltMail.lua
