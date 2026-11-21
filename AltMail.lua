@@ -27,28 +27,86 @@ local function SlotKey(bag, slot) return bag .. ":" .. slot end
 -- Alts
 ------------------------------------------------------------------------
 
+-- On Forever, characters have a first name and a surname ("Stuper Bonkbolt"), and
+-- UnitName's second return is that surname - not a realm. There are no realms to add.
+local function FullName(first, surname)
+	if type(surname) == "string" and surname ~= "" then
+		return first .. " " .. surname
+	end
+	return first
+end
+
+local function KeyFor(name)
+	return strtrim(name or ""):lower()
+end
+
+local function MyName()
+	local first, surname = UnitName("player")
+	if not first then return nil end
+	return FullName(first, surname)
+end
+
 local function MyKey()
-	return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
+	return KeyFor(MyName())
 end
 
 local function RecordMe()
-	local name = UnitName("player")
-	local realm = GetRealmName()
-	if not name or not realm then return end
+	local name = MyName()
+	if not name then return end
 	local _, class = UnitClass("player")
-	db.alts[MyKey()] = {
+	local key = KeyFor(name)
+	local old = db.alts[key] or {}
+	db.alts[key] = {
 		name = name,
-		realm = realm,
 		class = class,
 		faction = UnitFactionGroup("player"),
 		level = UnitLevel("player"),
+		manual = nil,
 	}
+	-- If this character was saved earlier under just its first name, drop that entry.
+	local first = UnitName("player")
+	if first and KeyFor(first) ~= key and db.alts[KeyFor(first)] then
+		db.alts[KeyFor(first)] = nil
+	end
+	return old
 end
 
--- What to type in the "To:" box: plain name on your realm, Name-Realm otherwise.
+-- What to type in the "To:" box: just the character's name.
 local function MailName(alt)
-	if not alt.realm or alt.realm == GetRealmName() then return alt.name end
-	return alt.name .. "-" .. alt.realm:gsub("%s", "")
+	return alt.name
+end
+
+-- Fix lists saved by AltMail 1.0/1.1: keys had "-Realm" on the end, a realm was stored
+-- (and added to the recipient), and the current character was saved by first name only.
+local function MigrateAlts()
+	if db.version and db.version >= 2 then return end
+	local fixed = {}
+	for _, alt in pairs(db.alts) do
+		if type(alt) == "table" and type(alt.name) == "string" then
+			alt.realm = nil
+			local key = KeyFor(alt.name)
+			local existing = fixed[key]
+			if existing then
+				-- Merge duplicates, keeping whatever details either copy has.
+				for k, v in pairs(alt) do if existing[k] == nil then existing[k] = v end end
+			else
+				fixed[key] = alt
+			end
+		end
+	end
+	-- Remove first-name-only leftovers when a full "First Surname" entry starts with them.
+	for key, alt in pairs(fixed) do
+		if not key:find(" ", 1, true) then
+			for otherKey in pairs(fixed) do
+				if otherKey ~= key and otherKey:sub(1, #key + 1) == key .. " " then
+					fixed[key] = nil
+					break
+				end
+			end
+		end
+	end
+	db.alts = fixed
+	db.version = 2
 end
 
 local function SortedAlts()
@@ -145,15 +203,16 @@ end
 local function AddAltByName(text)
 	text = strtrim(text or "")
 	if text == "" then return end
-	local name, realm = text:match("^([^%-]+)%-(.+)$")
-	name = name or text
-	realm = realm or GetRealmName()
-	name = name:sub(1, 1):upper() .. name:sub(2):lower()
-	local key = name .. "-" .. realm
+	-- Drop anything after a "-" (an old-style realm tag) and tidy the spacing.
+	local name = strtrim((text:gsub("%-.*$", ""):gsub("%s+", " ")))
+	if name == "" then return end
+	-- Capitalize each part: "stuper bonkbolt" -> "Stuper Bonkbolt"
+	name = name:gsub("(%S)(%S*)", function(a, b) return a:upper() .. b:lower() end)
+	local key = KeyFor(name)
 	if db.alts[key] then
 		Print(name .. " is already on the list.")
 	else
-		db.alts[key] = { name = name, realm = realm, faction = UnitFactionGroup("player") }
+		db.alts[key] = { name = name, faction = UnitFactionGroup("player"), manual = true }
 		Print("Added " .. name .. ". Log in on them once with AltMail on to get their class color.")
 	end
 	RefreshAlts()
@@ -547,6 +606,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		db = AltMailDB
 		db.alts = db.alts or {}
 		if db.subject == nil then db.subject = "here mail :)" end
+		MigrateAlts()
 		self:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" or event == "PLAYER_LEVEL_UP" then
 		RecordMe()
